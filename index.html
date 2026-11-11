@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dublagem Party</title>
+<style>
+  :root { --bg:#14121f; --card:#201c33; --accent:#ff4d8d; --accent2:#7c5cff; --text:#f2f0ff; --muted:#a39fc0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height:100vh; }
+  main { max-width: 820px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { text-align:center; margin: 8px 0 4px; font-size: 2rem; }
+  .sub { text-align:center; color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text], input[type=number] { flex:1; min-width: 160px; padding: 12px; border-radius: 10px; border: 2px solid #33305a; background:#16132a; color: var(--text); font-size: 1rem; }
+  input[type=number] { max-width: 110px; flex: 0 0 auto; }
+  label { color: var(--muted); font-size: .9rem; }
+  button { padding: 12px 16px; border:none; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor:pointer; color:#fff; background: var(--accent2); }
+  button.rec { background: var(--accent); }
+  button.ghost { background:#33305a; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .video { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:12px; overflow:hidden; }
+  .video iframe, .video #player { position:absolute; inset:0; width:100%; height:100%; }
+  #status { text-align:center; color: var(--muted); min-height: 1.4em; margin: 10px 0 0; }
+  #status.live { color: var(--accent); font-weight:700; }
+  audio { width:100%; margin-top: 10px; }
+  .hint { font-size:.85rem; color: var(--muted); margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎤 Dublagem Party</h1>
+  <p class="sub">Cole um vídeo do YouTube, grave sua voz e veja a dublagem em ação.</p>
+
+  <div class="card">
+    <div class="row">
+      <input type="text" id="url" placeholder="Link do YouTube (ex.: https://youtu.be/...)">
+      <button id="load">Carregar</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label for="start">Começar em (segundos):</label>
+      <input type="number" id="start" min="0" value="0">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="video"><div id="player"></div></div>
+    <div class="row" style="margin-top:12px; justify-content:center">
+      <button class="rec" id="btnRec" disabled>🔴 Gravar dublagem</button>
+      <button class="ghost" id="btnStop" disabled>⏹ Parar</button>
+      <button id="btnPlay" disabled>▶ Ver com minha voz</button>
+    </div>
+    <p id="status">Carregue um vídeo para começar.</p>
+    <p class="hint">Dica: use fones de ouvido. Na gravação o vídeo fica sem som para você dublar por cima.</p>
+  </div>
+
+  <div class="card" id="result" hidden>
+    <strong>Sua gravação</strong>
+    <audio id="audio" controls></audio>
+    <div class="row" style="margin-top:10px">
+      <a id="download" download="minha-dublagem.webm"><button class="ghost">⬇ Baixar áudio</button></a>
+    </div>
+  </div>
+</main>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+  let player, ready = false;
+  let mode = 'idle';            // idle | armedRec | recording | armedPlay | playing
+  let recorder, chunks = [], stream, audioURL = null;
+
+  const $ = id => document.getElementById(id);
+  const statusEl = $('status');
+  const audioEl = $('audio');
+
+  function setStatus(msg, live=false) { statusEl.textContent = msg; statusEl.className = live ? 'live' : ''; }
+
+  function getVideoId(u) {
+    const m = u.match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([\w-]{11})/);
+    return m ? m[1] : null;
+  }
+
+  function onYouTubeIframeAPIReady() {
+    player = new YT.Player('player', {
+      width: '100%', height: '100%',
+      playerVars: { playsinline: 1, rel: 0 },
+      events: {
+        onReady: () => { ready = true; },
+        onStateChange: onState
+      }
+    });
+  }
+
+  function startTime() { return Math.max(0, Number($('start').value) || 0); }
+
+  function onState(e) {
+    const S = YT.PlayerState;
+    if (e.data === S.PLAYING) {
+      if (mode === 'armedRec') { recorder.start(); mode = 'recording'; setStatus('🔴 Gravando... fale agora!', true); }
+      else if (mode === 'armedPlay') { audioEl.currentTime = 0; audioEl.play(); mode = 'playing'; setStatus('▶ Tocando com sua voz...'); }
+      else if (mode === 'playing') { audioEl.play(); }
+    }
+    if (e.data === S.PAUSED && mode === 'playing') audioEl.pause();
+    if (e.data === S.ENDED) {
+      if (mode === 'recording') stopRecording();
+      else if (mode === 'playing') finishPlay();
+    }
+  }
+
+  $('load').onclick = () => {
+    const id = getVideoId($('url').value.trim());
+    if (!id) return setStatus('Link inválido. Cole um link do YouTube.');
+    if (!ready) return setStatus('Player ainda carregando, tente de novo.');
+    player.loadVideoById(id);
+    player.pauseVideo();
+    $('btnRec').disabled = false;
+    setStatus('Vídeo pronto! Clique em "Gravar dublagem".');
+  };
+
+  $('btnRec').onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      return setStatus('Não consegui acessar o microfone. Permita o acesso e tente de novo.');
+    }
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      if (audioURL) URL.revokeObjectURL(audioURL);
+      audioURL = URL.createObjectURL(blob);
+      audioEl.src = audioURL;
+      $('download').href = audioURL;
+      $('result').hidden = false;
+      $('btnPlay').disabled = false;
+      setStatus('Gravação salva! Clique em "Ver com minha voz".');
+    };
+    mode = 'armedRec';
+    player.mute();
+    player.seekTo(startTime(), true);
+    player.playVideo();
+    $('btnRec').disabled = true; $('btnStop').disabled = false; $('btnPlay').disabled = true;
+    setStatus('Preparando...');
+  };
+
+  function stopRecording() {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    player.pauseVideo();
+    mode = 'idle';
+    $('btnRec').disabled = false; $('btnStop').disabled = true;
+  }
+
+  function finishPlay() {
+    audioEl.pause();
+    mode = 'idle';
+    $('btnRec').disabled = false; $('btnPlay').disabled = false; $('btnStop').disabled = true;
+    setStatus('Fim! Quer gravar de novo?');
+  }
+
+  $('btnStop').onclick = () => {
+    if (mode === 'recording' || mode === 'armedRec') stopRecording();
+    else if (mode === 'playing' || mode === 'armedPlay') { player.pauseVideo(); finishPlay(); }
+  };
+
+  $('btnPlay').onclick = () => {
+    if (!audioURL) return;
+    mode = 'armedPlay';
+    player.mute();                       // som original fica mudo, só a sua voz toca
+    player.seekTo(startTime(), true);
+    player.playVideo();
+    $('btnRec').disabled = true; $('btnPlay').disabled = true; $('btnStop').disabled = false;
+  };
+</script>
+</body>
+</html>
